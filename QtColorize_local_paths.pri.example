@@ -1,0 +1,2 @@
+LOCAL_QTCREATOR_SOURCES=/home/shvetsov/workspace/qt-creator-opensource-src-4.14.0
+LOCAL_IDE_BUILD_TREE=$$LOCAL_QTCREATOR_SOURCES/qtcreator-build

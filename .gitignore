@@ -1,0 +1,5 @@
+build/
+Makefile
+.qmake.stash
+*.user
+QtColorize_local_paths.pri

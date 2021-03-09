@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/qtcolorizeplugin">
+        <file>images/optionspageicon.png</file>
+    </qresource>
+</RCC>

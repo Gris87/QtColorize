@@ -5,6 +5,7 @@ SOURCES += \
     $$PWD/parsers/cppparser.cpp \
     $$PWD/parsers/gitignoreparser.cpp \
     $$PWD/parsers/makefileparser.cpp \
+    $$PWD/parsers/manifestparser.cpp \
     $$PWD/parsers/markdownparser.cpp \
     $$PWD/parsers/phpparser.cpp \
     $$PWD/parsers/proparser.cpp \
@@ -28,6 +29,7 @@ HEADERS += \
     $$PWD/parsers/cppparser.h \
     $$PWD/parsers/gitignoreparser.h \
     $$PWD/parsers/makefileparser.h \
+    $$PWD/parsers/manifestparser.h \
     $$PWD/parsers/markdownparser.h \
     $$PWD/parsers/phpparser.h \
     $$PWD/parsers/proparser.h \

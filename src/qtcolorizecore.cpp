@@ -464,17 +464,6 @@ void QtColorizeCore::updateSelectedRows(QtColorizeRowType type, bool toggle)
 
     if (changed)
     {
-        if (
-            selectionEnd > selectionStart
-            &&
-            endBlockPosition >= selectionEnd
-           )
-        {
-            endBlock = endBlock.next();
-        }
-
-
-
         qint64 positionInStartBlock = selectionStart - startBlockPosition;
         qint64 positionInEndBlock   = selectionEnd   - endBlockPosition;
         qint64 startBlockLength     = startBlock.text().length();

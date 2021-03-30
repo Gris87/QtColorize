@@ -16,6 +16,7 @@
 #include "src/parsers/cppparser.h"
 #include "src/parsers/gitignoreparser.h"
 #include "src/parsers/makefileparser.h"
+#include "src/parsers/manifestparser.h"
 #include "src/parsers/markdownparser.h"
 #include "src/parsers/phpparser.h"
 #include "src/parsers/proparser.h"
@@ -121,6 +122,7 @@ bool QtColorizePlugin::initialize(const QStringList &arguments, QString *errorSt
         CppParser        *cppParser        = new CppParser(this);
         GitIgnoreParser  *gitIgnoreParser  = new GitIgnoreParser(this);
         MakefileParser   *makefileParser   = new MakefileParser(this);
+        ManifestParser   *manifestParser   = new ManifestParser(this);
         MarkdownParser   *markdownParser   = new MarkdownParser(this);
         PhpParser        *phpParser        = new PhpParser(this);
         ProParser        *proParser        = new ProParser(this);
@@ -143,6 +145,7 @@ bool QtColorizePlugin::initialize(const QStringList &arguments, QString *errorSt
         mQtColorizeCore->addParser(sqlParser);
         mQtColorizeCore->addParser(virtualBoxParser);
         mQtColorizeCore->addParser(xmlParser);
+        mQtColorizeCore->addParser(manifestParser);
     }
 
 

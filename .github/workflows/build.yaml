@@ -1,0 +1,368 @@
+name: Plugin build
+
+on: [push]
+
+# Setup environment variables
+env:
+  QT_VERSION:         "6.2.4"
+  QT_CREATOR_VERSION: "7.0.0"
+  QT_MIRRORS:         "download.qt.io;mirrors.ocf.berkeley.edu/qt;ftp.fau.de/qtproject;mirror.bit.edu.cn/qtproject"
+
+# List of jobs
+jobs:
+  # Release job.
+  # This job is only used when github.ref contains /tags/
+  # It should be first in order to upload release artifacts
+  release:
+    name: Create release
+    if: contains(github.ref, '/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        if: contains(github.ref, '/tags/')
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          body: |
+            Release for Qt Creator ${{env.QT_CREATOR_VERSION}}.
+
+            IMPORTANT: plugin's version must match Qt Creator's version (difference in last digit is acceptable)
+
+            1. Extract/copy files from archive into Qt Creator's dir (archive already contains proper paths).
+            2. Enable the `QtColorize` plugin (Help -> About Plugins...)
+
+          draft: false
+          prerelease: false
+
+      - name: Store release url
+        shell: pwsh
+        run: Write-Output "${{ steps.create_release.outputs.upload_url }}" > ./release_upload_url.txt
+
+      - name: Upload release url
+        uses: actions/upload-artifact@v2
+        with:
+          path: ./release_upload_url.txt
+          name: release_upload_url.txt
+
+  # Build plugin and upload artifacts
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    env:
+      OS: ${{ matrix.config.name }}
+    strategy:
+      matrix:
+        config:
+          - { name: "win64", os: windows-latest }
+          - { name: "linux", os: ubuntu-latest }
+          - { name: "macos", os: macos-latest }
+      fail-fast: false
+
+    steps:
+      # Checkout latest commit for this repository to $GITHUB_WORKSPACE/QtColorize-source
+      - uses: actions/checkout@v2
+        with:
+          path: QtColorize-source
+
+      # Checkout QtCreator repository with specific version to $GITHUB_WORKSPACE/qt-creator
+      - uses: actions/checkout@v2
+        with:
+          repository: qt-creator/qt-creator
+          path: qt-creator
+          ref: v${{env.QT_CREATOR_VERSION}}
+
+      # Install required packages
+      - name: System packages
+        shell: pwsh
+        run: |
+          switch ("${{runner.os}}")
+          {
+            "Windows" { choco install ninja }
+            "Linux"   { sudo apt-get update; sudo apt-get install -y libclang-dev libclang-12-dev libclang-11-dev ninja-build gettext libgl1-mesa-dev libvulkan-dev libxcb-xinput-dev libxcb-xinerama0-dev libxkbcommon-dev libxkbcommon-x11-dev }
+            "macOS"   { brew update; brew install ninja }
+          }
+
+      # Download Qt with specified version
+      - name: Download Qt
+        id: qt
+        shell: cmake -P {0}
+        run: |
+          # Set qt_version variable to environment variable QT_VERSION
+          set(qt_version ${{env.QT_VERSION}})
+
+          # Remove all dots "." from qt_version and put result to qt_version_dotless
+          string(REPLACE "." "" qt_version_dotless "${qt_version}")
+
+          # Setup several platform-dependent variables
+          if ("${{ runner.os }}" STREQUAL "Windows")
+            set(url_os "windows_x86")
+            set(qt_package_arch_suffix "win64_msvc2019_64")
+            set(qt_dir_prefix "${qt_version}/msvc2019_64")
+            set(qt_package_suffix "-Windows-Windows_10_21H2-MSVC2019-Windows-Windows_10_21H2-X86_64")
+          elseif ("${{ runner.os }}" STREQUAL "Linux")
+            set(url_os "linux_x64")
+            set(qt_package_arch_suffix "gcc_64")
+            set(qt_dir_prefix "${qt_version}/gcc_64")
+            set(qt_package_suffix "-Linux-RHEL_8_4-GCC-Linux-RHEL_8_4-X86_64")
+          elseif ("${{ runner.os }}" STREQUAL "macOS")
+            set(url_os "mac_x64")
+            set(qt_package_arch_suffix "clang_64")
+            set(qt_dir_prefix "${qt_version}/macos")
+            set(qt_package_suffix "-MacOS-MacOS_12-Clang-MacOS-MacOS_12-X86_64-ARM64")
+          endif()
+
+          # Set qt_base_url
+          set(qt_base_url "https://\${qt_mirror}/online/qtsdkrepository/${url_os}/desktop/qt6_${qt_version_dotless}")
+
+          # Try to download Updates.xml from available QT mirrors
+          foreach(qt_mirror $ENV{QT_MIRRORS})
+            cmake_language(EVAL CODE "
+              message(\"Downloading: ${qt_base_url}/Updates.xml\")
+              file(DOWNLOAD \"${qt_base_url}/Updates.xml\" ./Updates.xml)
+            ")
+            file(SIZE ./Updates.xml fileSize)
+            if (fileSize GREATER 0)
+              break()
+            endif()
+          endforeach()
+
+          # Get package version that used together with package file name in order to download package
+          file(READ ./Updates.xml updates_xml)
+          string(REGEX MATCH "<Name>qt.qt6.*<Version>([0-9+-.]+)</Version>" updates_xml_output "${updates_xml}")
+          set(qt_package_version ${CMAKE_MATCH_1})
+
+          # Create qt6 directory
+          file(MAKE_DIRECTORY qt6)
+
+          # Export qt_dir for other steps
+          file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qt6/${qt_dir_prefix}" qt_dir)
+          message("::set-output name=qt_dir::${qt_dir}")
+
+          # Declare downloadAndExtract function
+          function(downloadAndExtract url archive)
+            foreach(qt_mirror $ENV{QT_MIRRORS})
+              cmake_language(EVAL CODE "
+                message(\"Downloading: ${url}\")
+                file(DOWNLOAD \"${url}\" ./${archive})
+              ")
+              file(SIZE ./${archive} fileSize)
+              if (fileSize GREATER 0)
+                break()
+              endif()
+            endforeach()
+            execute_process(COMMAND ${CMAKE_COMMAND} -E tar xvf ../${archive} WORKING_DIRECTORY qt6)
+          endfunction()
+
+          # Download packages
+          foreach(package qtbase qtdeclarative qttools qttranslations)
+            downloadAndExtract(
+              "${qt_base_url}/qt.qt6.${qt_version_dotless}.${qt_package_arch_suffix}/${qt_package_version}${package}${qt_package_suffix}.7z"
+              ${package}.7z
+            )
+          endforeach()
+
+          foreach(package qt5compat)
+            downloadAndExtract(
+              "${qt_base_url}/qt.qt6.${qt_version_dotless}.${package}.${qt_package_arch_suffix}/${qt_package_version}${package}${qt_package_suffix}.7z"
+              ${package}.7z
+            )
+          endforeach()
+
+          # uic depends on libicu56.so
+          if ("${{ runner.os }}" STREQUAL "Linux")
+            downloadAndExtract(
+              "${qt_base_url}/qt.qt6.${qt_version_dotless}.${qt_package_arch_suffix}/${qt_package_version}icu-linux-Rhel7.2-x64.7z"
+              icu.7z
+            )
+          endif()
+
+          # Update license from Enterprise to OpenSource
+          file(READ "qt6/${qt_dir_prefix}/mkspecs/qconfig.pri" qtconfig)
+          string(REPLACE "Enterprise" "OpenSource" qtconfig "${qtconfig}")
+          string(REPLACE "licheck.exe" "" qtconfig "${qtconfig}")
+          string(REPLACE "licheck64" "" qtconfig "${qtconfig}")
+          string(REPLACE "licheck_mac" "" qtconfig "${qtconfig}")
+          file(WRITE "qt6/${qt_dir_prefix}/mkspecs/qconfig.pri" "${qtconfig}")
+
+      # Build Qt Creator with CMake
+      - name: Build Qt Creator
+        shell: pwsh
+        run: |
+          # Setup Developer PowerShell for Windows
+          switch ("${{runner.os}}")
+          {
+              "Windows" {
+                  Write-Output "Setup Developer PowerShell"
+                  # https://github.com/microsoft/terminal/issues/3821#issuecomment-651506501
+                  # The setup-msbuild action is not used since it does not set up the path to 'cl'
+                  # see: https://github.com/microsoft/setup-msbuild/issues/24
+                  ${VS_INST_PATH} = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+                  Write-Output "VS Installation Path: ${VS_INST_PATH}"
+                  Import-Module ${VS_INST_PATH}/Common7/Tools/Microsoft.VisualStudio.DevShell.dll
+                  Enter-VsDevShell -VsInstallPath ${VS_INST_PATH} -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -no_logo'
+              }
+          }
+          
+          # Create build-qtcreator folder and enter into it
+          New-Item -Path "." -Name "build-qtcreator" -ItemType "directory"
+          Set-Location -Path "build-qtcreator"
+          
+          # Build Qt Creator
+          cmake -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ steps.qt.outputs.qt_dir }}" `
+            -DBUILD_PLUGINS_BY_DEFAULT=OFF `
+            -DBUILD_LIBRARIES_BY_DEFAULT=OFF `
+            -DBUILD_EXECUTABLES_BY_DEFAULT=OFF `
+            -DBUILD_TESTS_BY_DEFAULT=OFF `
+            -DBUILD_LIBRARY_CPLUSPLUS=ON `
+            -DBUILD_LIBRARY_EXTENSIONSYSTEM=ON `
+            -DBUILD_LIBRARY_UTILS=ON `
+            -DBUILD_PLUGIN_CORE=ON `
+            -DBUILD_PLUGIN_TEXTEDITOR=ON `
+            -DBUILD_LIBRARY_AGGREGATION=ON `
+            -DBUILD_LIBRARY_3RD_CPLUSPLUS=ON `
+            -DBUILD_LIBRARY_QTCSSH=ON `
+            -DBUILD_LIBRARY_CLANGSUPPORT=ON `
+            ../qt-creator
+          cmake --build .
+
+      # Build Plugin with CMake
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          # Setup Developer PowerShell for Windows
+          switch ("${{runner.os}}")
+          {
+              "Windows" {
+                  Write-Output "Setup Developer PowerShell"
+                  # https://github.com/microsoft/terminal/issues/3821#issuecomment-651506501
+                  # The setup-msbuild action is not used since it does not set up the path to 'cl'
+                  # see: https://github.com/microsoft/setup-msbuild/issues/24
+                  ${VS_INST_PATH} = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+                  Write-Output "VS Installation Path: ${VS_INST_PATH}"
+                  Import-Module ${VS_INST_PATH}/Common7/Tools/Microsoft.VisualStudio.DevShell.dll
+                  Enter-VsDevShell -VsInstallPath ${VS_INST_PATH} -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -no_logo'
+              }
+          }
+
+          # Create build-plugin folder and enter into it
+          New-Item -Path "." -Name "build-plugin" -ItemType "directory"
+          Set-Location -Path "build-plugin"
+
+          # Build Plugin
+          cmake -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ steps.qt.outputs.qt_dir }};../qt-creator;../build-qtcreator" `
+            ../QtColorize-source/
+          cmake --build .
+
+      # Archive result biraries
+      - name: Collect binaries
+        shell: pwsh
+        run: |
+          ${PLUGIN_DIR_BASE} = "Plugin/"
+          ${PLUGIN_ARCHIVE}  = "QtColorize-${env:QT_CREATOR_VERSION}-${env:OS}"
+
+          # Create archive
+          switch ("${{runner.os}}")
+          {
+              "Windows" {
+                ${PLUGIN_DIR_OUT} = "${PLUGIN_DIR_BASE}/lib/qtcreator/plugins"
+                ${PLUGIN_TS_OUT}  = "${PLUGIN_DIR_BASE}/share/qtcreator/translations"
+
+                # Create directories
+                New-Item -Path "${PLUGIN_DIR_OUT}" -ItemType Directory -Force
+                New-Item -Path "${PLUGIN_TS_OUT}"  -ItemType Directory -Force
+
+                # Copy binaries to target folders
+                Copy-Item -Path "build-plugin/lib/qtcreator/plugins/QtColorize.dll" -Destination "${PLUGIN_DIR_OUT}/"
+                Copy-Item -Path "build-plugin/*.qm"                                 -Destination "${PLUGIN_TS_OUT}/"
+
+                # Go into PLUGIN_DIR_BASE directory and archive results
+                Push-Location ${PLUGIN_DIR_BASE}
+                ${env:PLUGIN_ARCHIVE_NAME} = "${PLUGIN_ARCHIVE}.zip"
+                7z a "${env:PLUGIN_ARCHIVE_NAME}" lib share
+                Pop-Location
+              }
+              "Linux" {
+                ${PLUGIN_DIR_OUT} = "${PLUGIN_DIR_BASE}/lib/qtcreator/plugins"
+                ${PLUGIN_TS_OUT}  = "${PLUGIN_DIR_BASE}/share/qtcreator/translations"
+
+                # Create directories
+                New-Item -Path "${PLUGIN_DIR_OUT}" -ItemType Directory -Force
+                New-Item -Path "${PLUGIN_TS_OUT}"  -ItemType Directory -Force
+
+                # Copy binaries to target folders
+                Copy-Item -Path "build-plugin/lib/qtcreator/plugins/libQtColorize.so" -Destination "${PLUGIN_DIR_OUT}/"
+                Copy-Item -Path "build-plugin/*.qm"                                   -Destination "${PLUGIN_TS_OUT}/"
+
+                # Go into PLUGIN_DIR_BASE directory and archive results
+                Push-Location ${PLUGIN_DIR_BASE}
+                ${env:PLUGIN_ARCHIVE_NAME} = "${PLUGIN_ARCHIVE}.tar.xz"
+                tar -c -f "${env:PLUGIN_ARCHIVE_NAME}" --xz -v lib share
+                Pop-Location
+              }
+              "macOS" {
+                ${PLUGIN_DIR_OUT} = "${PLUGIN_DIR_BASE}/Qt Creator.app/Contents/PlugIns"
+                ${PLUGIN_TS_OUT}  = "${PLUGIN_DIR_BASE}/Qt Creator.app/Contents/Resources/translations"
+
+                # Create directories
+                New-Item -Path "${PLUGIN_DIR_OUT}" -ItemType Directory -Force
+                New-Item -Path "${PLUGIN_TS_OUT}"  -ItemType Directory -Force
+
+                # Copy binaries to target folders
+                Copy-Item -Path "build-plugin/Qt Creator.app/Contents/PlugIns/libQtColorize.dylib" -Destination "${PLUGIN_DIR_OUT}/"
+                Copy-Item -Path "build-plugin/*.qm"                                                -Destination "${PLUGIN_TS_OUT}/"
+
+                Push-Location ${PLUGIN_DIR_BASE}
+                ${env:PLUGIN_ARCHIVE_NAME} = "${PLUGIN_ARCHIVE}.tar.xz"
+                tar -c -f "${env:PLUGIN_ARCHIVE_NAME}" --xz -v "Qt Creator.app"
+                Pop-Location
+              }
+          }
+          ${env:PLUGIN_ARCHIVE_FULL} = "${PLUGIN_DIR_BASE}/${env:PLUGIN_ARCHIVE_NAME}"
+
+          # Export artifact path and name for the next step
+          Write-Output "PLUGIN_ARCHIVE_FULL=${{github.workspace}}/${env:PLUGIN_ARCHIVE_FULL}" | Out-File -FilePath ${env:GITHUB_ENV} -Encoding utf8 -Append
+          Write-Output "PLUGIN_ARCHIVE_NAME=${env:PLUGIN_ARCHIVE_NAME}"                       | Out-File -FilePath ${env:GITHUB_ENV} -Encoding utf8 -Append
+
+      # Upload artifacts
+      - uses: actions/upload-artifact@v2
+        id: upload_artifact
+        with:
+          path: ${{env.PLUGIN_ARCHIVE_FULL}}
+          name: ${{env.PLUGIN_ARCHIVE_NAME}}
+
+      # Download release_upload_url.txt artifact
+      - name: Download release url
+        if: contains(github.ref, '/tags/')
+        uses: actions/download-artifact@v2
+        with:
+          name: release_upload_url.txt
+          path: ./
+
+      # Set RELEASE_URL environment variable
+      - name: Set RELEASE_URL environment variable
+        if: contains(github.ref, '/tags/')
+        shell: pwsh
+        run: |
+          ${RELEASE_URL} = Get-Content ./release_upload_url.txt
+          Write-Output "Release URL: ${RELEASE_URL}"
+          Write-Output "RELEASE_URL=${RELEASE_URL}" | Out-File -FilePath ${env:GITHUB_ENV} -Encoding utf8 -Append
+
+      # Upload release artifacts
+      - name: Upload release artifacts
+        if: contains(github.ref, '/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{env.RELEASE_URL}}
+          asset_path: ${{env.PLUGIN_ARCHIVE_FULL}}
+          asset_name: ${{env.PLUGIN_ARCHIVE_NAME}}
+          asset_content_type: application/zip

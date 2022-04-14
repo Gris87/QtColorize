@@ -1,0 +1,12 @@
+{
+    \"Name\" : \"QtColorize\",
+    \"Version\" : \"$$QTCREATOR_VERSION\",
+    \"CompatVersion\" : \"$$QTCREATOR_COMPAT_VERSION\",
+    \"Experimental\" : true,
+    \"Vendor\" : \"NGOS\",
+    \"Copyright\" : \"(C) NGOS\",
+    \"License\" : \"Free\",
+    \"Description\" : \"Colorize your code lines with specific comments\",
+    \"Url\" : \"https://github.com/Gris87/QtColorize\",
+    $$dependencyList
+}

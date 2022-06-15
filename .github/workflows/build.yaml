@@ -4,7 +4,7 @@ on: [push]
 
 # Setup environment variables
 env:
-  QT_VERSION:         "6.3.1"
+  QT_VERSION:         "6.2.3"
   QT_CREATOR_VERSION: "7.0.2"
   QT_MIRRORS:         "download.qt.io;mirrors.ocf.berkeley.edu/qt;ftp.fau.de/qtproject;mirror.bit.edu.cn/qtproject"
 
